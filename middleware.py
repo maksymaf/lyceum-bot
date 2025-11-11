@@ -19,4 +19,4 @@ class ThrottlingMiddleware(BaseMiddleware):
             return 
         await self.storage.redis.set(name=user, value=1, ex=FLOOD_TIMING)
 
-        return await handler(event, data);
+        return await handler(event, data)

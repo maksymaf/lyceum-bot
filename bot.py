@@ -293,6 +293,9 @@ async def handle_text(message: Message):
     if text == "📢 Оголошення":
         await cmd_announcements(message)
         return
+    if text == "❌ Назад":
+        await message.answer("Повертаю головне меню 👇", reply_markup=main_kb)
+        return
     if text in schedule_data:
         await show_schedule_for_class(message, text, tomorrow=False)
         return

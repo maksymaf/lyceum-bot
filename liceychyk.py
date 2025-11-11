@@ -104,7 +104,7 @@ async def show_liceychyk_profile(message: Message, uid: str):
 
     if alive:
         feed_kb = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="🍽 Погодувати")]],
+            keyboard=[[KeyboardButton(text="🍽 Погодувати"), KeyboardButton(text="❌ Назад")]],
             resize_keyboard=True
         )
         await message.answer(text, reply_markup=feed_kb)
