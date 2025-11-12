@@ -6,6 +6,9 @@ from aiogram import Router, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import Command
 from config import ADMIN_USER_ID
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram import types
+
 
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
@@ -21,6 +24,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 AUTHORIZED_LICEYCHYK_FILE = os.path.join(DATA_DIR, "authorized_liceychyk.json")
 TAMAGOTCHI_FILE = os.path.join(DATA_DIR, "tamagotchi.json")
+QUIZ_FILE = os.path.join(DATA_DIR, "quiz.json")
 
 def load_json(path, default):
     if os.path.exists(path):
@@ -34,8 +38,11 @@ def save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+user_quiz = {}
+
 authorized_liceychyk = load_json(AUTHORIZED_LICEYCHYK_FILE, [])
 tamagotchi_data = load_json(TAMAGOTCHI_FILE, {})
+quiz_data = load_json(QUIZ_FILE, {});
 
 FOOD_EMOJIS = [
     "🍏", "🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🫐", "🍈", "🍒", "🍑", "🥭", "🍍", "🥥", "🥝",
@@ -104,7 +111,11 @@ async def show_liceychyk_profile(message: Message, uid: str):
 
     if alive:
         feed_kb = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="🍽 Погодувати"), KeyboardButton(text="❌ Назад")]],
+            keyboard=[[
+                KeyboardButton(text="🍽 Погодувати"), 
+                KeyboardButton(text="❌ Назад"),
+                KeyboardButton(text="❓ Вікторина")
+            ]],
             resize_keyboard=True
         )
         await message.answer(text, reply_markup=feed_kb)
@@ -311,6 +322,103 @@ async def feed_liceychyk_choice(message: Message):
     save_json(TAMAGOTCHI_FILE, tamagotchi_data)
 
     await message.answer(f"Ліцейчик: {reply}", reply_markup=main_kb)
+
+@liceychyk_router.message(F.text == "❓ Вікторина") 
+async def quiz_liceychyk_start(message: Message): 
+    user_id = message.from_user.id 
+    uid = str(user_id) 
+    if uid not in tamagotchi_data: 
+        await message.answer("Спочатку заведи Ліцейчика!", reply_markup=main_kb) 
+        return 
+    data = tamagotchi_data[uid] 
+    if not data["alive"]: 
+        await message.answer("Ліцейчик мертвий... Спочатку відроди його.", reply_markup=main_kb) 
+        return
+    
+    last_quiz = data.get("last_quiz")
+    if last_quiz == str(date.today()):
+        await message.answer("🕓 Ти вже проходив вікторину сьогодні! Спробуй завтра 👇", reply_markup=main_kb)
+        return
+
+    data["last_quiz"] = str(date.today())
+    tamagotchi_data[uid] = data
+    save_json(TAMAGOTCHI_FILE, tamagotchi_data)
+    
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🏺 Історія", callback_data="quiz_category:history")
+    kb.button(text="⚛️ Фізика", callback_data="quiz_category:physics")
+    kb.button(text="🧮 Математика", callback_data="quiz_category:math")
+    kb.button(text="🧬 Біологія", callback_data="quiz_category:biology")
+    kb.button(text="💻 Інформатика", callback_data="quiz_category:informatics")
+    kb.button(text="🌍 Географія", callback_data="quiz_category:geo")
+    kb.button(text="🪐 Астрономія", callback_data="quiz_category:astronomy")
+    kb.button(text="📚 Література", callback_data="quiz_category:literature")
+    kb.button(text="⚗️ Хімія", callback_data="quiz_category:chemistry")
+    kb.button(text="🗺️ Географія України", callback_data="quiz_category:geography_ukraine")
+
+    kb.adjust(1)
+
+    await message.answer("Вибери категорію вікторини:", reply_markup=kb.as_markup())
+
+@liceychyk_router.callback_query(F.data.startswith("quiz_category:"))
+async def quiz_choose_category(callback: types.CallbackQuery): 
+    uid = str(callback.from_user.id) 
+    category = callback.data.split(":")[1] 
+    user_quiz[uid] = {"category": category, "index": 0}
+
+    try:
+        await callback.message.delete()
+    except:
+        pass
+
+    await send_quiz_question(callback.message, uid) 
+    await callback.answer() 
+
+async def send_quiz_question(message: types.Message, uid):
+    info = user_quiz[uid]
+    category = info["category"]
+    index = info["index"]
+    questions = quiz_data[category]
+    print(questions)
+
+    if index >= len(questions):
+        await message.answer("🎉 Вікторину завершено!")
+        del user_quiz[uid]
+        return
+
+    q = questions[index]
+    kb = InlineKeyboardBuilder()
+    for i, opt in enumerate(q["options"]):
+        kb.button(text=opt, callback_data=f"quiz_answer:{category}:{i}")
+    kb.adjust(1)
+
+    await message.answer(f"❓ {q['q']}", reply_markup=kb.as_markup())
+
+@liceychyk_router.callback_query(F.data.startswith("quiz_answer:"))
+async def quiz_handle_answer(callback: types.CallbackQuery):
+    uid = str(callback.from_user.id)
+    data = callback.data.split(":")
+    category = data[1]
+    answer_index = int(data[2])
+
+    question_index = user_quiz[uid]["index"]
+    question = quiz_data[category][question_index]
+
+    if answer_index == question["correct"]:
+        reply = "✅ Правильно! (+10xp)"
+        tamagotchi_data[uid]["xp"] += 10
+    else:
+        reply = f"❌ Неправильно! (-5xp) Правильна відповідь: {question['options'][question['correct']]}"
+        tamagotchi_data[uid]["xp"] -= 5
+
+    save_json(TAMAGOTCHI_FILE, tamagotchi_data)
+
+    await callback.message.answer(reply)
+
+    user_quiz[uid]["index"] += 1
+    await send_quiz_question(callback.message, uid)
+
+    await callback.answer()
 
 @liceychyk_router.message(F.text == "💫 Відродити")
 async def revive_liceychyk(message: Message):

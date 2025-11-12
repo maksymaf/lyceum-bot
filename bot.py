@@ -12,7 +12,6 @@ from config import TOKEN, ADMIN_USER_ID
 from middleware import ThrottlingMiddleware
 from aiogram.fsm.storage.redis import RedisStorage
 from liceychyk import liceychyk_router
-# from liceychyk import handle_liceychyk
 import logging
 logging.basicConfig(level=logging.INFO)
 
@@ -120,8 +119,6 @@ async def show_schedule_for_class(message: Message, class_key: str, tomorrow=Fal
         text += f"{i+1}. {time_slot} — {subject.strip()}\n"
 
     await message.answer(text, reply_markup=main_kb)
-
-
 
 router = Router()
 
