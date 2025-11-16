@@ -138,7 +138,7 @@ async def show_liceychyk_profile(message: Message, uid: str):
 
 @liceychyk_router.message(Command("killliceychyk"))
 async def cmd_kill_liceychyk(message: Message):
-    if message.from_user.id != ADMIN_USER_ID:
+    if message.from_user.id not in ADMIN_USER_ID:
         return
     parts = message.text.split()
     if len(parts) < 2:
@@ -158,7 +158,7 @@ async def cmd_kill_liceychyk(message: Message):
 
 @liceychyk_router.message(Command("coolliceychyk"))
 async def cmd_cooldown_liceychyk(message: Message):
-    if message.from_user.id != ADMIN_USER_ID:
+    if message.from_user.id not in ADMIN_USER_ID:
         await message.answer("❌ У вас немає прав.")
         return
     parts = message.text.split()
@@ -179,7 +179,7 @@ async def cmd_cooldown_liceychyk(message: Message):
     yesterday = str(date.today() - timedelta(days=1))
     data = tamagotchi_data[uid]
     data["last_fed"] = yesterday
-    data["last_quiz"] = None
+    data["last_quiz"] = yesterday
     data["last_daily"] = yesterday
     tamagotchi_data[uid] = data
     save_json(TAMAGOTCHI_FILE, tamagotchi_data)
@@ -187,7 +187,7 @@ async def cmd_cooldown_liceychyk(message: Message):
 
 @liceychyk_router.message(Command("deleteliceychyk"))
 async def cmd_delete_liceychyk(message: Message):
-    if message.from_user.id != ADMIN_USER_ID:
+    if message.from_user.id not in ADMIN_USER_ID:
         await message.answer("❌ У вас немає прав.")
         return
     parts = message.text.split()
@@ -211,7 +211,7 @@ async def cmd_delete_liceychyk(message: Message):
 
 @liceychyk_router.message(Command("addliceychyk"))
 async def cmd_add_liceychyk(message: Message):
-    if message.from_user.id != ADMIN_USER_ID:
+    if message.from_user.id not in ADMIN_USER_ID:
         await message.answer("❌ У вас немає прав для цієї команди.")
         return
     parts = message.text.split()

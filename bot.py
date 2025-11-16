@@ -22,6 +22,12 @@ ANNOUNCEMENTS_FILE = os.path.join(DATA_DIR, "announcements.json")
 HELPERS_FILE = os.path.join(DATA_DIR, "helpers.json")
 SUBSCRIBERS_FILE = os.path.join(DATA_DIR, "subscribers.json")
 
+category_names = {
+    "general": "📢 Загальне оголошення",
+    "events": "📅 Подія",
+    "achievements": "🏆 Досягнення"
+}
+
 os.makedirs(DATA_DIR, exist_ok=True)
 
 def load_json(path, default):
@@ -49,8 +55,6 @@ LESSON_TIMES = [
     "12:00–12:45", "13:00–13:45", "13:50–14:35", "14:50–15:35"
 ]
 
-os.makedirs(DATA_DIR, exist_ok=True)
-
 def load_json(path, default):
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -73,6 +77,11 @@ main_kb = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
+announcements_inline_kb = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="📅 Заходи ліцею", callback_data="ann_events")],
+    [InlineKeyboardButton(text="🏆 Досягнення учнів", callback_data="ann_achievements")],
+    [InlineKeyboardButton(text="📢 Загальні оголошення", callback_data="ann_general")],
+])
 
 def make_rows(items, suffix=""):
     rows = []
@@ -141,7 +150,7 @@ async def cmd_menu(message: Message):
 
 @router.message(Command("addhelper"))
 async def cmd_add_helper(message: Message):
-    if message.from_user.id != ADMIN_USER_ID:
+    if message.from_user.id not in ADMIN_USER_ID:
         await message.answer("❌ У вас немає прав для цієї команди.")
         return
     parts = message.text.split()
@@ -160,114 +169,217 @@ async def cmd_add_helper(message: Message):
     else:
         await message.answer("🔹 Цей користувач уже є помічником.")
 
-def get_announcement_kb(index: int, user_id: int):
-    rows = []
-    n = len(announcements)
-    if n > 1:
+def get_ann_kb(ann_type: str, index: int, total: int, user_id: int):
+    if ann_type != "general" or total <= 1:
+        nav = []
+    else:
         nav = []
         if index > 0:
-            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"ann_prev_{index-1}"))
-        if index < n - 1:
-            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"ann_next_{index+1}"))
-        if nav:
-            rows.append(nav)
-    if user_id in ([ADMIN_USER_ID] + helpers):
-        rows.append([InlineKeyboardButton(text="🗑 Видалити", callback_data=f"ann_del_{index}")])
-    if not rows:
-        return None
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"ann_prev_{ann_type}_{index-1}"))
+        if index < total - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"ann_next_{ann_type}_{index+1}"))
+
+    kb = []
+    if nav:
+        kb.append(nav)
+
+    if is_admin_or_helper(user_id):
+        kb.append([InlineKeyboardButton(text="🗑 Видалити", callback_data=f"ann_del_{ann_type}_{index}")])
+
+    return InlineKeyboardMarkup(inline_keyboard=kb) if kb else None
+
+def is_admin_or_helper(user_id: int) -> bool:
+    return (user_id in ADMIN_USER_ID) or (user_id in helpers)
+
+pending_announcements = {}  # user_id → {"type": "...", "text": "..."}
 
 @router.message(Command("announce"))
 async def cmd_announce(message: Message):
-    if message.from_user.id not in ([ADMIN_USER_ID] + helpers):
+    if not is_admin_or_helper(message.from_user.id):
         await message.answer("❌ У вас немає прав для цієї команди.")
         return
-    parts = message.text.split(maxsplit=1)
-    if len(parts) < 2:
-        await message.answer("Напишіть повідомлення після команди:\n/announce Завтра збори батьків!")
+
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.answer(
+            "Використання:\n/announce <категорія> <текст>\n"
+            "Категорії: general, events, achievements"
+        )
         return
-    text = parts[1].strip()
+
+    category, text = parts[1], parts[2].strip()
+    if category not in ("general", "events", "achievements"):
+        await message.answer("Невідома категорія. Використовуйте: general, events, achievements")
+        return
     if not text:
         await message.answer("Порожнє оголошення неможливе.")
         return
-    pending_announcements[message.from_user.id] = text
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+
+    pending_announcements[message.from_user.id] = {"type": category, "text": text}
+    preview = f"Підтвердіть публікацію:\n\n{category_names[category]}\n\n{text}"
+
+    confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Підтвердити", callback_data="confirm_announce"),
-            InlineKeyboardButton(text="❌ Відмінити", callback_data="cancel_announce")
+            InlineKeyboardButton(text="✅ Підтвердити", callback_data="ann_confirm"),
+            InlineKeyboardButton(text="❌ Скасувати", callback_data="ann_cancel")
         ]
     ])
-    await message.answer(f"Підтвердити надсилання оголошення:\n\n{text}", reply_markup=kb)
 
-@router.callback_query(lambda c: c.data in ["confirm_announce", "cancel_announce"])
-async def confirm_or_cancel_announcement(callback: CallbackQuery):
+    await message.answer(preview, reply_markup=confirm_kb)
+
+@router.callback_query(lambda c: c.data in ["ann_confirm", "ann_cancel"])
+async def handle_announce_confirm(callback: CallbackQuery):
     user_id = callback.from_user.id
-    if callback.data == "cancel_announce":
+    action = callback.data
+    announcement = pending_announcements.get(user_id)
+    if not announcement:
+        await callback.answer("Немає очікуючого оголошення.", show_alert=True)
+        try:
+            await callback.message.edit_text("❌ Дія застаріла.")
+        except:
+            pass
+        return
+
+    if action == "ann_cancel":
         pending_announcements.pop(user_id, None)
-        try: await callback.message.edit_text("❌ Оголошення скасовано.")
-        except: pass
+        try:
+            await callback.message.edit_text("❌ Публікацію скасовано.")
+        except:
+            pass
         await callback.answer()
         return
-    text = pending_announcements.pop(user_id, None)
-    if not text:
-        await callback.answer("Немає оголошення для підтвердження.", show_alert=True)
-        return
-    announcements.append(text)
-    save_json(ANNOUNCEMENTS_FILE, announcements)
-    for user_id in subscribers:
-        try:
-           await callback.bot.send_message(chat_id=user_id, text=f"📢 {text}")
-        except Exception as e:
-           print(f"Не вдалося надіслати користувачу {user_id}: {e}")
-    try: await callback.message.edit_text("✅ Оголошення надіслано й збережено.")
-    except: pass
+
+    category = announcement["type"]
+    text = announcement["text"]
+    pending_announcements.pop(user_id, None)
+
+    if category == "general":
+        announcements.append({"type": "general", "text": text})
+        save_json(ANNOUNCEMENTS_FILE, announcements)
+
+        sent_count = 0
+        for sub_id in subscribers:
+            try:
+                await callback.bot.send_message(sub_id, f"📢 {text}")
+                sent_count += 1
+            except Exception as e:
+                logging.warning(f"Не вдалося надіслати {sub_id}: {e}")
+
+        await callback.message.edit_text(f"✅ Оголошення надіслано {sent_count} користувачам і збережено.")
+    else:
+        if category == "events":
+            data_file = "data/events.json"
+        else:
+            data_file = "data/achievements.json"
+
+        items = load_json(data_file, [])
+        items.append(text)
+        save_json(data_file, items)
+        await callback.message.edit_text(f"✅ {category_names[category]} додано (без розсилки).")
+
     await callback.answer()
 
-@router.message(Command("announcements"))
+@router.message(lambda m: m.text == "📢 Оголошення")
 async def cmd_announcements(message: Message):
-    if not announcements:
-        await message.answer("Немає оголошень.")
-        return
-    index = len(announcements) - 1
-    text = f"📢 {announcements[index]}"
-    kb = get_announcement_kb(index, message.from_user.id)
-    await message.answer(text, reply_markup=kb)
+    await message.answer("Оберіть категорію оголошень:", reply_markup=announcements_inline_kb)
 
 @router.callback_query(lambda c: c.data and c.data.startswith("ann_"))
-async def navigate_announcements(callback: CallbackQuery):
-    parts = callback.data.split("_")
-    if len(parts) < 3: 
-        await callback.answer(); return
-    action, index = parts[1], int(parts[2])
-    if action in ["next", "prev"]:
-        if not (0 <= index < len(announcements)): await callback.answer(); return
-        text = f"📢 {announcements[index]}"
-        kb = get_announcement_kb(index, callback.from_user.id)
-        try:
-            if kb: await callback.message.edit_text(text, reply_markup=kb)
-            else: await callback.message.edit_text(text)
-        except: pass
+async def handle_announcement_callbacks(callback: CallbackQuery):
+    data = callback.data
+    user_id = callback.from_user.id
+    global announcements
+
+    if data == "ann_general":
+        general_anns = [a for a in announcements if a["type"] == "general"]
+        if not general_anns:
+            await callback.message.edit_text("📢 Немає загальних оголошень.")
+        else:
+            index = len(general_anns) - 1  
+            text = f"📢 {general_anns[index]['text']}"
+            kb = get_ann_kb("general", index, len(general_anns), user_id)
+            await callback.message.edit_text(text, reply_markup=kb)
         await callback.answer()
         return
-    if action == "del":
-        if callback.from_user.id not in ([ADMIN_USER_ID] + helpers):
-            await callback.answer("❌ Немає прав.", show_alert=True); return
-        if not (0 <= index < len(announcements)):
-            await callback.answer("Помилка: індекс невалідний.", show_alert=True); return
-        deleted = announcements.pop(index)
-        save_json(ANNOUNCEMENTS_FILE, announcements)
-        if announcements:
-            new_index = min(index, len(announcements)-1)
-            text = f"📢 {announcements[new_index]}"
-            kb = get_announcement_kb(new_index, callback.from_user.id)
-            try:
-                if kb: await callback.message.edit_text(text, reply_markup=kb)
-                else: await callback.message.edit_text(text)
-            except: pass
+
+    if data == "ann_events":
+        events = load_json("data/events.json", [])
+        if not events:
+            await callback.message.edit_text("📅 Немає запланованих заходів.")
         else:
-            try: await callback.message.edit_text(f"🗑 Видалено оголошення:\n\n{deleted}\n\nНаразі немає оголошень.")
-            except: pass
+            text = "📅 Заходи ліцею:\n\n" + "\n".join(f"- {e}" for e in events)
+            await callback.message.edit_text(text)
+        await callback.answer()
+        return
+
+    if data == "ann_achievements":
+        achievements = load_json("data/achievements.json", [])
+        if not achievements:
+            await callback.message.edit_text("🏆 Немає досягнень учнів.")
+        else:
+            text = "🏆 Досягнення учнів:\n\n" + "\n".join(f"- {a}" for a in achievements)
+            await callback.message.edit_text(text)
+        await callback.answer()
+        return
+
+    if data == "ann_back":
+        await callback.message.edit_text("Повертаю головне меню 👇", reply_markup=main_kb)
+        await callback.answer()
+        return
+
+    parts = data.split("_")
+    if len(parts) < 3:
+        await callback.answer()
+        return
+
+    action, ann_type, index_str = parts[1], parts[2], parts[3]
+    try:
+        index = int(index_str)
+    except:
+        await callback.answer("Помилка індексу.")
+        return
+
+    general_anns = [a for a in announcements if a["type"] == "general"]
+    if not (0 <= index < len(general_anns)):
+        await callback.answer("Оголошення не знайдено.")
+        return
+
+    if action == "next" or action == "prev":
+        new_index = index + (1 if action == "next" else -1)
+        if 0 <= new_index < len(general_anns):
+            text = f"📢 {general_anns[new_index]['text']}"
+            kb = get_ann_kb("general", new_index, len(general_anns), user_id)
+            await callback.message.edit_text(text, reply_markup=kb)
+        await callback.answer()
+        return
+
+    if action == "del":
+        if not is_admin_or_helper(user_id):
+            await callback.answer("❌ Немає прав.", show_alert=True)
+            return
+        deleted = general_anns.pop(index)
+        
+        announcements = [a for a in announcements if not (a["type"] == "general" and a["text"] == deleted["text"])]
+        save_json(ANNOUNCEMENTS_FILE, announcements)
+
+        if general_anns:
+            new_index = min(index, len(general_anns) - 1)
+            text = f"📢 {general_anns[new_index]['text']}"
+            kb = get_ann_kb("general", new_index, len(general_anns), user_id)
+            await callback.message.edit_text(text, reply_markup=kb)
+        else:
+            await callback.message.edit_text("📢 Загальних оголошень немає.")
         await callback.answer("Видалено ✅")
+        return
+
+    if data == "ann_achievements":
+        achievements = load_json("data/achievements.json", [])
+        if not achievements:
+            await callback.message.edit_text("🏆 Немає досягнень учнів.")
+        else:
+            text = "🏆 Досягнення учнів:\n\n" + "\n".join(f"- {a}" for a in achievements)
+            await callback.message.edit_text(text)
+        await callback.answer()
+        return
 
 @router.message()
 async def handle_text(message: Message):
